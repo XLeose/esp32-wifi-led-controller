@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ESP32 HSV LED Color Controller</title>
+    <style>
+        body {
+            background-color: #1a1a1a;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-top: 30px;
+            touch-action: none; /* Prevent unwanted page scrolling during touch gestures */
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        h2 {
+            margin-bottom: 20px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        /* Container for Side-by-Side HSV Panels */
+        .picker-container {
+            display: flex;
+            gap: 20px;
+            align-items: stretch;
+            margin-bottom: 20px;
+        }
+
+        /* 1. Left 2D Square (Saturation and Value/Brightness) */
+        #sv-area {
+            width: 280px;
+            height: 280px;
+            position: relative;
+            cursor: crosshair;
+            border: 2px solid #444;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #ff0000; /* Dynamically updated by JS from Hue slider */
+        }
+
+        /* White to Transparent Layer (Saturation gradient) */
+        .sv-white-layer {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(to right, #ffffff, rgba(255,255,255,0));
+        }
+
+        /* Black to Transparent Layer (Value/Brightness gradient) */
+        .sv-black-layer {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: linear-gradient(to top, #000000, rgba(0,0,0,0));
+        }
+
+        /* Cursor Indicator inside SV Square */
+        #sv-cursor {
+            position: absolute;
+            width: 14px;
+            height: 14px;
+            border: 2px solid white;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            box-shadow: 0 0 4px rgba(0,0,0,0.9);
+            left: 100%; /* Initial: Top Right (Pure Color) */
+            top: 0%;
+        }
+
+        /* 2. Right 1D Vertical Slider (Hue 0-360deg Spectrum) */
+        #hue-slider {
+            width: 36px;
+            height: 280px;
+            position: relative;
+            cursor: ns-resize;
+            border: 2px solid #444;
+            border-radius: 8px;
+            background: linear-gradient(to bottom, 
+                #ff0000 0%, 
+                #ffff00 17%, 
+                #00ff00 33%, 
+                #00ffff 50%, 
+                #0000ff 67%, 
+                #ff00ff 83%, 
+                #ff0000 100%);
+        }
+
+        /* Hue Slider Indicator Pointer */
+        #hue-cursor {
+            position: absolute;
+            width: 100%;
+            height: 6px;
+            background-color: rgba(255,255,255,0.9);
+            border: 1px solid #111;
+            transform: translateY(-50%);
+            pointer-events: none;
+            top: 0%; /* Initial: Top */
+        }
+
+        /* Telemetry & Color Preview Box Container */
+        .info-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        #color-info {
+            font-size: 1.1rem;
+            font-family: monospace;
+            letter-spacing: 1px;
+        }
+
+        /* Color Preview Swatch */
+        #color-preview {
+            width: 36px;
+            height: 36px;
+            border: 2px solid white;
+            border-radius: 6px;
+            background-color: rgb(255, 0, 0);
+            box-shadow: 0 0 10px rgba(0,0,0,0.5);
+        }
+
+        /* Modern Switch Button */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 4em;
+            height: 2.2em;
+        }
+
+        /* Hide default checkbox */
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        /* Animated Slider Track */
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            inset: 0;
+            border: 2px solid #414141;
+            border-radius: 50px;
+            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            background-color: #222;
+        }
+
+        .slider:before {
+            position: absolute;
+            content: "";
+            height: 1.5em;
+            width: 1.5em;
+            left: 0.25em;
+            bottom: 0.25em;
+            background-color: white;
+            border-radius: 50%;
+            transition: all 0.4s cubic-bezier(0.23, 1, 0.320, 1);
+        }
+
+        .switch input:checked + .slider {
+            box-shadow: 0 0 20px rgba(9, 117, 241, 0.8);
+            border-color: #0974f1;
+            background-color: #0974f1;
+        }
+
+        .switch input:checked + .slider:before {
+            transform: translateX(1.75em);
+        }
+    </style>
+</head>
+<body>
+
+    <h2>ESP32 Color Controller</h2>
+    
+    <div class="picker-container">
+        <!-- 2D Saturation and Value / Brightness Area -->
+        <div id="sv-area">
+            <div class="sv-white-layer"></div>
+            <div class="sv-black-layer"></div>
+            <div id="sv-cursor"></div>
+        </div>
+        
+        <!-- 1D Hue Spectrum Slider -->
+        <div id="hue-slider">
+            <div id="hue-cursor"></div>
+        </div>
+    </div>
+    
+    <div class="info-container">
+        <div id="color-info">RGB(255, 0, 0)</div>
+        <div id="color-preview"></div>
+    </div>
+    
+    <!-- On/Off Switch Button -->
+    <label class="switch">
+        <input type="checkbox" id="led-switch" checked>
+        <span class="slider"></span>
+    </label>
+
+    <script>
+        const svArea = document.getElementById('sv-area');
+        const svCursor = document.getElementById('sv-cursor');
+        const hueSlider = document.getElementById('hue-slider');
+        const hueCursor = document.getElementById('hue-cursor');
+        const colorInfo = document.getElementById('color-info');
+        const colorPreview = document.getElementById('color-preview');
+        const ledSwitch = document.getElementById('led-switch');
+
+        // Initial HSV Values (Red, 100% Saturation, 100% Value)
+        let H = 0;   // 0 - 360
+        let S = 100; // 0 - 100
+        let V = 100; // 0 - 100
+
+        let lastSendTime = 0;
+        let isDraggingSV = false;
+        let isDraggingHue = false;
+
+        // Convert HSV (Hue, Saturation, Value) to RGB (0-255)
+        function hsvToRgb(h, s, v) {
+            s /= 100;
+            v /= 100;
+            let c = v * s;
+            let x = c * (1 - Math.abs((h / 60) % 2 - 1));
+            let m = v - c;
+            let r_prime, g_prime, b_prime;
+
+            if (h >= 0 && h < 60) { r_prime = c; g_prime = x; b_prime = 0; }
+            else if (h >= 60 && h < 120) { r_prime = x; g_prime = c; b_prime = 0; }
+            else if (h >= 120 && h < 180) { r_prime = 0; g_prime = c; b_prime = x; }
+            else if (h >= 180 && h < 240) { r_prime = 0; g_prime = x; b_prime = c; }
+            else if (h >= 240 && h < 300) { r_prime = x; g_prime = 0; b_prime = c; }
+            else { r_prime = c; g_prime = 0; b_prime = x; }
+
+            return {
+                r: Math.round((r_prime + m) * 255),
+                g: Math.round((g_prime + m) * 255),
+                b: Math.round((b_prime + m) * 255)
+            };
+        }
+
+        // Send RGB values to ESP32 with 50ms Throttling/Debouncing protection
+        function sendToESP32(r, g, b) {
+            const now = Date.now();
+            if (now - lastSendTime > 50) { // Max 20 commands/sec to prevent memory overflow
+                lastSendTime = now;
+                fetch('/color', {
+                    method: 'POST',
+                    body: `rgb(${r},${g},${b})`
+                }).catch(err => console.error("Transmission Error:", err));
+            }
+        }
+
+        // Update UI visuals and dispatch color command
+        function updateColor() {
+            // Assign Hue color to SV square background
+            svArea.style.backgroundColor = `hsl(${H}, 100%, 50%)`;
+            
+            // Calculate RGB values
+            const rgb = hsvToRgb(H, S, V);
+            
+            // Update labels and color swatch
+            colorInfo.innerText = `RGB(${rgb.r}, ${rgb.g}, ${rgb.b})`;
+            colorPreview.style.backgroundColor = `rgb(${rgb.r},${rgb.g},${rgb.b})`;
+
+            // Dispatch HTTP request to ESP32
+            sendToESP32(rgb.r, rgb.g, rgb.b);
+        }
+
+        // === 1D HUE SLIDER HANDLER ===
+        function handleHue(clientY) {
+            if (!ledSwitch.checked) return; 
+            const rect = hueSlider.getBoundingClientRect();
+            let y = clientY - rect.top;
+            y = Math.max(0, Math.min(y, rect.height)); // Clamp
+            
+            hueCursor.style.top = y + 'px';
+            H = Math.round((y / rect.height) * 360);
+            if (H === 360) H = 0;
+            
+            updateColor();
+        }
+
+        // === 2D SATURATION / VALUE HANDLER ===
+        function handleSV(clientX, clientY) {
+            if (!ledSwitch.checked) return;
+            const rect = svArea.getBoundingClientRect();
+            let x = clientX - rect.left;
+            let y = clientY - rect.top;
+            
+            x = Math.max(0, Math.min(x, rect.width));
+            y = Math.max(0, Math.min(y, rect.height));
+
+            svCursor.style.left = x + 'px';
+            svCursor.style.top = y + 'px';
+
+            // X axis determines Saturation (0% left, 100% right)
+            S = Math.round((x / rect.width) * 100);
+            
+            // Y axis determines Value (100% top, 0% bottom)
+            V = Math.round((1 - (y / rect.height)) * 100);
+
+            updateColor();
+        }
+
+        // === EVENT LISTENERS (MOUSE & TOUCH) ===
+
+        // Hue Slider Events
+        const startHue = (e) => { isDraggingHue = true; handleHue(e.touches ? e.touches[0].clientY : e.clientY); };
+        const moveHue = (e) => { if (isDraggingHue) handleHue(e.touches ? e.touches[0].clientY : e.clientY); };
+        const endHue = () => { isDraggingHue = false; };
+
+        hueSlider.addEventListener('mousedown', startHue);
+        window.addEventListener('mousemove', moveHue);
+        window.addEventListener('mouseup', endHue);
+        
+        hueSlider.addEventListener('touchstart', startHue, { passive: true });
+        window.addEventListener('touchmove', moveHue, { passive: true });
+        window.addEventListener('touchend', endHue);
+
+        // SV Square Events
+        const startSV = (e) => { isDraggingSV = true; handleSV(e.touches ? e.touches[0].clientX : e.clientX, e.touches ? e.touches[0].clientY : e.clientY); };
+        const moveSV = (e) => { if (isDraggingSV) handleSV(e.touches ? e.touches[0].clientX : e.clientX, e.touches ? e.touches[0].clientY : e.clientY); };
+        const endSV = () => { isDraggingSV = false; };
+
+        svArea.addEventListener('mousedown', startSV);
+        window.addEventListener('mousemove', moveSV);
+        window.addEventListener('mouseup', endSV);
+
+        svArea.addEventListener('touchstart', startSV, { passive: true });
+        window.addEventListener('touchmove', moveSV, { passive: true });
+        window.addEventListener('touchend', endSV);
+
+        // Power Switch Toggle Listener
+        ledSwitch.addEventListener('change', function(event) {
+            const isChecked = event.target.checked;
+            if (isChecked) {
+                svArea.style.opacity = '1';
+                hueSlider.style.opacity = '1';
+                svArea.style.pointerEvents = 'auto';
+                hueSlider.style.pointerEvents = 'auto';
+                updateColor();
+                console.log("LED Turned ON");
+            } else {
+                svArea.style.opacity = '0.3';
+                hueSlider.style.opacity = '0.3';
+                svArea.style.pointerEvents = 'none';
+                hueSlider.style.pointerEvents = 'none';
+                sendToESP32(0, 0, 0); // Turn off LED
+                console.log("LED Turned OFF");
+            }
+        });
+    </script>
+</body>
+</html>
